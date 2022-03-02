@@ -74,6 +74,12 @@ def pageConfig() {
                     app.updateLabel(app.label - " (Paused)")
                 }
             }
+            input "testApp", "bool", title: "Test App", defaultValue:false, submitOnChange:true
+            if (testApp) {
+    		    input "testDate", "string", title: "Date of the next event in format YYYY-MM-DD", required:true, defaultValue:null, submitOnChange:true
+    		    input "testStartTime", "string", title: "Start time of the next event in format HH:MM:SS", required:true, defaultValue:null, submitOnChange:true
+    		    input "testEndTime", "string", title: "End time of the next event in format HH:MM:SS", required:true, defaultValue:null, submitOnChange:true
+            }                
         }
 
         section(getFormat("header-green", "${getImage("Blank")}"+" Moring and Evening Events")) {}
@@ -87,17 +93,17 @@ def pageConfig() {
             
             paragraph "<b>Select thermostats to turn <i>DOWN</i> during a morning event.</b>"
 			input "eventMorningThermostats", "capability.thermostat", title: "Thermostats", multiple: true
-		    input "eventMorningDegrees", "number", title: "Number of degrees $displayUnits to drop from current setting", required:true, defaultValue:3, submitOnChange:true
+		    input "eventMorningDegrees", "number", title: "Number of degrees $displayUnits to drop from current setting", required:true, defaultValue:3
             
             paragraph "<b>Select device to speak to during a morning event.</b>"
             input name: "myDeviceMorning", type: "capability.speechSynthesis", title: "Select speaker"
 		    input "morningBeforeText", "string", title: "Text to speak BEFORE morning event", required:false, defaultValue: null
 		    input "morningAfterText", "string", title: "Text to speak AFTER morning event", required:false, defaultValue: null           
             
-            paragraph "<b>Increase temperature BEFORE MORNING event</b>"
+            paragraph "<b>Select devices to increase temperature BEFORE MORNING event</b>"
             input "morningDeviceIncr", "capability.thermostat", title: "Thermostats", multiple: true
-		    input "morningHoursIncr", "string", title: "Number of HOURS to increase temperature BEFORE morning event", required:false, defaultValue: null
-		    input "morningTempIncr", "string", title: "Temperature to set BEFORE morning event", required:false, defaultValue: null
+		    input "morningHoursIncr", "string", title: "Number of HH:MM to increase temperature BEFORE morning event", required:false, defaultValue: null
+		    input "morningTempIncr", "string", title: "Number of degrees to increase temperature BEFORE morning event", required:false, defaultValue: null
 
         }
 
@@ -110,19 +116,18 @@ def pageConfig() {
 
             paragraph "<b>Select thermostats to turn <i>DOWN</i> during an evening event.</b>"
 			input "eventEveningThermostats", "capability.thermostat", title: "Thermostats", multiple: true
-		    input "eventEveningDegrees", "number", title: "Number of degrees $displayUnits to drop from current setting", required:true, defaultValue:3, submitOnChange:true
+		    input "eventEveningDegrees", "number", title: "Number of degrees $displayUnits to drop from current setting", required:true, defaultValue:3
             
             paragraph "<b>Select device to speak to during an evening event.</b>"
             input name: "myDeviceEvening", type: "capability.speechSynthesis", title: "Select speaker"
 		    input "eveningBeforeText", "string", title: "Text to speak BEFORE evening event", required:false, defaultValue: null
 		    input "eveningAfterText", "string", title: "Text to speak AFTER evening event", required:false, defaultValue: null
             
-            paragraph "<b>Increase temperature BEFORE EVENING event</b>"
+            paragraph "<b>Select devices to increase temperature BEFORE EVENING event</b>"
             input "eveningDeviceIncr", "capability.thermostat", title: "Thermostats", multiple: true
-		    input "eveningHoursIncr", "string", title: "Number of HOURS to increase temperature BEFORE evening event", required:false, defaultValue: null
-		    input "eveningTempIncr", "string", title: "Temperature to set BEFORE evening event", required:false, defaultValue: null
-        }
-        
+		    input "eveningHoursIncr", "string", title: "Number of HH:MM to increase temperature BEFORE evening event", required:false, defaultValue: null
+            input "eveningTempIncr", "string", title: "Number of degrees to increase temperature BEFORE evening event", required:false, defaultValue: null
+        }        
         section() {}
         section(getFormat("header-green", "${getImage("Blank")}"+" Settings")) {}
 
@@ -213,9 +218,8 @@ def initialize() {
         subscribe(location, "systemStart", hubRestartHandler)
 
     // Schedule to start polling every day the API
-        unschedule()    
         currTime = new Date()
-        if (currTime >= timeToday("12:30")) {
+        if (currTime >= timeToday("12:30") || testApp) {
             startPolling()
         }
         schedule("59 29 12 ? * * *", startPolling, [overwrite: true])
@@ -275,10 +279,15 @@ def hubRestartHandler(evt) {
 //
 //************************************************************
 def startPolling() {
-    logger("trace", "startPoll")
+    logger("trace", "startPolling")
 
     if (!eventPollEnableSwitch?.currentValue("switch") || eventPollEnableSwitch.currentValue("switch") == "on")
-        runEvery15Minutes(poll)        
+        if (testApp)
+            poll()
+        else {
+            poll()
+            runEvery1Hour(poll)        
+        }
 }
 
 
@@ -297,7 +306,7 @@ def startPolling() {
 //
 //************************************************************
 def poll() {
-    logger("trace", "poll")
+    logger("debug", "poll")
 	def requestParams = [ uri: state.apiUrl]
 	logger("debug", "Poll Api: $requestParams")
 	asynchttpGet("pollHandler", requestParams)
@@ -323,7 +332,7 @@ def pollHandler(resp, data) {
     if(resp.getStatus() == 200 || resp.getStatus() == 207) {
         logger("debug", "Poll Api Successful")
         
-        if (state.apiData == resp.data) {
+        if (state.apiData == resp.data && !testApp) {
             logger("debug", "API data has not changed, nothing to do")
             
             //Let's see if we are after 21:00, if so let's stop poling, for sure no new data.
@@ -363,8 +372,11 @@ def pollHandler(resp, data) {
 //************************************************************
 def handleHQEvents() {
     logger("trace", "HandleHQEvents")
-    
+
     response = parseJson(state.apiData)    
+   
+    if (testApp && testDate && testStartTime && testEndTime)
+        response.data.tomorrow = [["date":testDate,"heureDebut":testStartTime,"heureFin":testEndTime]]
     
     def startWinterPeriod = Date.parse("yyyy-MM-dd'T'HH:mm:ss", response.data.info.dateDebutPeriodeHiver.replace(".000+0000",""))
     def endWinterPeriod = Date.parse("yyyy-MM-dd'T'HH:mm:ss", response.data.info.dateFinPeriodeHiver.replace(".000+0000",""))
@@ -383,6 +395,9 @@ def handleHQEvents() {
                 //Let's parse event info so we can schedule it, send info to logs or even to a device
                 eventStartPeriodISO = "$eventInfo.date" + "T" + "$eventInfo.heureDebut"
                 eventStartPeriod = Date.parse("yyyy-MM-dd'T'HH:mm:ss", eventStartPeriodISO)
+                if (eventStartPeriod < currDate)
+                    break
+
                 eventEndPeriodISO = "$eventInfo.date" + "T" + "$eventInfo.heureFin"
                 eventEndPeriod = Date.parse("yyyy-MM-dd'T'HH:mm:ss", eventEndPeriodISO)
                 eventDate = eventInfo.date.split('-')
@@ -409,55 +424,68 @@ def handleHQEvents() {
                     newEventsPush = newEventsPush + " & " 
                 }
 
-def previousSettings = [:]
- 
                 //Let's program events 
                 if (eventStartHour.toInteger() < 12) {
-// JB **********************************
-// JB Début code ajouté
-// JB **********************************
-////        for(eventSwitch in eventMorningSwitches) {
-////            previousSettings.put("$eventSwitch",eventSwitch.currentValue("switch"))
-////            eventSwitch.off()
-////            pauseExecution(5000)
-////            eventSwitch.on()
-////        }
-// JB **********************************
-// JB Fin code ajouté
-// JB **********************************                    
                     schedule("$eventStartSecond $eventStartMinute $eventStartHour $eventDay $eventMonth ? $eventYear", setHouseInMorningEventMode, [overwrite: false])
                     schedule("$eventEndSecond $eventEndMinute $eventEndHour $eventDay $eventMonth ? $eventYear", setHouseInMorningNormalMode, [overwrite: false])
                     newEventsPush = newEventsPush + "$eventStartHour:$eventStartMinute:$eventStartSecond to $eventEndHour:$eventEndMinute:$eventEndSecond"
                     myDeviceNewEvent.speak(eventDetectedTextAM)
         
-                    if (morningHoursIncr) {
-                        if (morningTempIncr) {
-                            morningHourIncr = eventStartHour - morningHoursIncr
-                            schedule("$eventStartSecond $eventStartMinute $morningHourIncr $eventDay $eventMonth ? $eventYear", setHouseBeforeMorning, [overwrite: false])
+                    if (morningHoursIncr && morningTempIncr && morningHoursIncr.length == 5) {
+						incrHr = morningHoursIncr.substring(0,1)
+						incrMin = morningHoursIncr.substring(3,4)
+
+                        if (eventStartMinute >= incrMin) {
+                            morningMinIncr = eventStartMinute.toInteger() - incrMin.toInteger()
                         }
+                        else 
+							if (eventStartHour > 0) {
+								morningMinIncr = 60 - incrMin.toInteger() + eventStartMinute.toInteger()
+								eventStartHour = eventStartHour - 1
+							}
+							else
+								morningMinIncr = 0
+
+
+                        if (eventStartHour >= morningHoursIncr) {
+                            morningHrIncr = eventStartHour.toInteger() - morningHoursIncr.toInteger()
+                        }
+                        else {
+                            morningHrIncr = 0
+                        }
+                        
+                        schedule("$eventStartSecond $morningMinIncr $morningHrIncr $eventDay $eventMonth ? $eventYear", setHouseBeforeMorning, [overwrite: false])
                     }
                 } 
                 else {
-// JB **********************************
-// JB Début code ajouté
-// JB **********************************
-////        for(eventSwitch in eventEveningSwitches) {
-////            previousSettings.put("$eventSwitch",eventSwitch.currentValue("switch"))
-////            eventSwitch.off()
-////            pauseExecution(5000)
-////            eventSwitch.on()
-////        }
-// JB **********************************
-// JB Fin code ajouté
-// JB **********************************
                     schedule("$eventStartSecond $eventStartMinute $eventStartHour $eventDay $eventMonth ? $eventYear", setHouseInEveningEventMode, [overwrite: false])
                     schedule("$eventEndSecond $eventEndMinute $eventEndHour $eventDay $eventMonth ? $eventYear", setHouseInEveningNormalMode, [overwrite: false])
                     newEventsPush = newEventsPush + "$eventStartHour:$eventStartMinute:$eventStartSecond to $eventEndHour:$eventEndMinute:$eventEndSecond"
                     myDeviceNewEvent.speak(eventDetectedTextPM)
-        
-                    if (eveningHoursIncr && eveningTempIncr) {
-                        eveningHourIncr = eventStartHour - eveningHoursIncr
-                        schedule("$eventStartSecond $eventStartMinute $eveningHourIncr $eventDay $eventMonth ? $eventYear", setHouseBeforeEvening, [overwrite: false])
+
+                    if (eveningHoursIncr && eveningTempIncr && eveningHoursIncr.length == 5) {
+						incrHr = eveningHoursIncr.substring(0,2)
+						incrMin = eveningHoursIncr.substring(3,5)
+
+                        if (eventStartMinute >= incrMin) {
+                            eveningMinIncr = eventStartMinute.toInteger() - incrMin.toInteger()
+                        }
+                        else 
+							if (eventStartHour > 0) {
+								eveningMinIncr = 60 - incrMin.toInteger() + eventStartMinute.toInteger()
+								eventStartHour = eventStartHour - 1
+							}
+							else
+								eveningMinIncr = 0
+
+                        if (eventStartHour >= eveningHoursIncr) {
+                            eveningHrIncr = eventStartHour.toInteger() - incrHr.toInteger()
+                        }
+                        else {
+                            eveningHrIncr = 0
+                        }
+                        
+                        schedule("$eventStartSecond $eveningMinIncr $eveningHrIncr $eventDay $eventMonth ? $eventYear", setHouseBeforeEvening, [overwrite: false])
                     }
                 }
             
@@ -495,9 +523,10 @@ def setHouseBeforeMorning() {
         exit
     }
 
+    def previousSettings = [:]
     for(thermostat in morningDeviceIncr) {
         previousSettings.put("$thermostat",thermostat.currentValue("heatingSetpoint"))
-        newSetpoint = morningTempIncr.toInteger()
+        newSetpoint = thermostat.currentValue("heatingSetpoint") + morningTempIncr.toInteger()
         thermostat.setHeatingSetpoint(newSetpoint)
         pauseExecution(1000)
     }
@@ -524,9 +553,10 @@ def setHouseBeforeEvening() {
         exit
     }
 
+    def previousSettings = [:]
     for(thermostat in eveningDeviceIncr) {
         previousSettings.put("$thermostat",thermostat.currentValue("heatingSetpoint"))
-        newSetpoint = eveningTempIncr.toInteger()
+        newSetpoint = thermostat.currentValue("heatingSetpoint") + eveningTempIncr.toInteger()
         thermostat.setHeatingSetpoint(newSetpoint)
         pauseExecution(1000)
     }
@@ -583,6 +613,16 @@ def setHouseInMorningEventMode() {
         }
     }
 
+    // Set back the thermostats that were increased before the event
+    if (morningTempIncr) {
+        for(thermostat in morningDeviceIncr) {
+            previousSettings.put("$thermostat",thermostat.currentValue("heatingSetpoint"))
+            newSetpoint = thermostat.currentValue("heatingSetpoint") - morningTempIncr.toInteger()
+            thermostat.setHeatingSetpoint(newSetpoint)
+            pauseExecution(1000)
+        }
+    }
+    
     for(thermostat in eventMorningThermostats) {
         previousSettings.put("$thermostat",thermostat.currentValue("heatingSetpoint"))
         newSetpoint = thermostat.currentValue("heatingSetpoint") - eventEveningDegrees.toInteger()
@@ -645,6 +685,16 @@ def setHouseInEveningEventMode() {
             thermostat.setThermostatMode("off")
             pauseExecution(1000)
             logger("debug", "$thermostat turned off")
+        }
+    }
+
+    // Set back the thermostats that were increased before the event
+    if (eveningTempIncr) {
+        for(thermostat in eveningDeviceIncr) {
+            previousSettings.put("$thermostat",thermostat.currentValue("heatingSetpoint"))
+            newSetpoint = thermostat.currentValue("heatingSetpoint") - eveningTempIncr.toInteger()
+            thermostat.setHeatingSetpoint(newSetpoint)
+            pauseExecution(1000)
         }
     }
 
@@ -877,14 +927,35 @@ def getDisplayUnits() {
 }
 
 
+//************************************************************
+// getFormat
+//     Get the fornat for headers
+// Signature(s)
+//     getFormat(String type, String myText)
+// Parameters
+//     type: format
+//     myTest: Text to diplay
+// Returns
+//     None
+//************************************************************
 def getFormat(type, myText="") {			// Modified from @Stephack Code   
 	if(type == "header-green") return "<div style='color:#ffffff;font-weight: bold;background-color:#81BC00;border: 1px solid;box-shadow: 2px 3px #A9A9A9'>${myText}</div>"
     if(type == "line") return "<hr style='background-color:#1A77C9; height: 1px; border: 0;'>"
     if(type == "title") return "<h2 style='color:#1A77C9;font-weight: bold'>${myText}</h2>"
 }
 
+//************************************************************
+// getImage
+//     Get the image for headers
+// Signature(s)
+//     getImage(String type)
+// Parameters
+//     type: Image
+// Returns
+//     None
+//************************************************************
 def getImage(type) {					// Modified from @Stephack Code
-    def loc = "<img src=https://raw.githubusercontent.com/bptworld/Hubitat/master/resources/images/"
+    def loc = "<img src=https://raw.githubusercontent.com/jbilodea/HydroQuebec/main/Images/"
     if(type == "Blank") return "${loc}blank.png height=40 width=5}>"
     if(type == "checkMarkGreen") return "${loc}checkMarkGreen2.png height=30 width=30>"
     if(type == "optionsGreen") return "${loc}options-green.png height=30 width=30>"
