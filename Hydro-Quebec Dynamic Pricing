@@ -234,11 +234,11 @@ def uninstalled() {
 
 
 //************************************************************
-// startPolling
+// hubRestartHandler
 //     Schedule polling every 15 minutes until we find new data
 //
 // Signature(s)
-//     startPolling()
+//     hubRestartHandler()
 //
 // Parameters
 //     None
